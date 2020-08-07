@@ -1,0 +1,25 @@
+{
+  "name": "renice",
+  "version": "1.0.0",
+  "description": "renices things",
+  "main": "index.js",
+  "scripts": {
+    "build": "run-s \"zarro build\"",
+    "publish": "dotnet publish src/renice/renice.csproj -c Release -r win-x64",
+    "zarro": "zarro"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fluffynuts/renice.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/fluffynuts/renice/issues"
+  },
+  "homepage": "https://github.com/fluffynuts/renice#readme",
+  "devDependencies": {
+    "zarro": "^1.73.0"
+  }
+}
