@@ -20,6 +20,6 @@
   },
   "homepage": "https://github.com/fluffynuts/renice#readme",
   "devDependencies": {
-    "zarro": "^1.73.0"
+    "zarro": "^1.78.0"
   }
 }
