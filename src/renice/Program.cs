@@ -38,10 +38,8 @@ namespace renice
             var result = DistributeTheNiceness(niceness.Value, processIds, verbose)
                 ? 1
                 : 0;
-            if (_lastMessageLength > 0)
-            {
-                Console.WriteLine("\n");
-            }
+            
+            AfterStatus();
 
             return result;
         }
@@ -171,6 +169,7 @@ namespace renice
                 if (verbose)
                 {
                     Status($"altered priority of pid [{id}] from {originalClass} to {selected}");
+                    AfterStatus();
                 }
 
                 return true;
@@ -189,6 +188,15 @@ namespace renice
             var timestamped = $"[{TimeStamp}] {message}";
             Console.Out.Write($"\r{overwrite}\r{timestamped}");
             _lastMessageLength = timestamped.Length;
+        }
+
+        private static void AfterStatus()
+        {
+            if (_lastMessageLength > 0)
+            {
+                _lastMessageLength = 0;
+                Console.WriteLine("");
+            }
         }
 
         private static string TimeStamp 
