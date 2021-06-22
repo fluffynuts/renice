@@ -2,111 +2,136 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
+using System.Text.RegularExpressions;
 using System.Threading;
+using System.Threading.Tasks;
 
 namespace renice
 {
     class Program
     {
-        static int Main(string[] args)
+        static async Task<int> Main(string[] args)
         {
-            var (niceness, watch, processIds, showedHelp, verbose) = ParseArgs(args);
-            if (showedHelp)
+            var options = ParseArgs(args);
+            if (options.ShowedHelp)
             {
                 return 0;
             }
 
-            if (niceness is null)
+            if (!options.NicenessSet && !options.Dummy)
             {
-                Console.WriteLine("niceness not specified");
+                options.Logger.Log("niceness not specified");
                 ShowHelp();
                 return 1;
             }
 
-            if (processIds.Length == 0)
+            if (options.ProcessIds.Count == 0 && options.ProcessMatchers.Count == 0)
             {
-                Console.WriteLine("no process ids specified");
+                options.Logger.Log("no process ids specified");
                 ShowHelp();
                 return 1;
             }
 
-            if (watch)
+            if (options.Dummy)
             {
-                return Watch(niceness.Value, processIds, verbose);
+                options.Logger.Log("Running in dummy mode: will only report and take no action");
             }
 
-            var result = DistributeTheNiceness(niceness.Value, processIds, verbose)
+            if (options.Watch)
+            {
+                return await Watch(options);
+            }
+
+            var result = await DistributeTheNiceness(options)
                 ? 1
                 : 0;
-            
-            AfterStatus();
+
+            options.Logger.AfterStatus();
 
             return result;
         }
 
-        static (int? niceness, bool watch, int[] processIds, bool showedHelp, bool verbose) ParseArgs(string[] args)
+        // FIXME: this parser should really never have been made
+        // -> this should have been outsourced to library code
+        static Options ParseArgs(string[] args)
         {
-            var niceness = null as int?;
-            var processIds = new List<int>();
             var lastArg = null as string;
-            var watch = false;
-            var verbose = false;
+            var result = new Options();
             foreach (var s in args)
             {
                 if (s == "--help" || s == "-h")
                 {
                     ShowHelp();
-                    return (null, false, new int[0], true, false);
+                    return result;
                 }
 
                 if (s == "-w")
                 {
-                    watch = true;
+                    result.Watch = true;
                     continue;
                 }
 
                 if (s == "-v")
                 {
-                    verbose = true;
+                    result.Verbose = true;
                     continue;
                 }
 
-                if (s == "-n" || s == "-p")
+                if (s == "-d")
+                {
+                    result.Dummy = true;
+                    continue;
+                }
+
+                if (s == "-n" || s == "-p" || s == "-l" || s == "-f")
                 {
                     lastArg = s;
+                    continue;
+                }
+
+                if (lastArg == "-f")
+                {
+                    result.ProcessMatchers.Add(s);
+                    continue;
+                }
+
+                if (lastArg == "-l")
+                {
+                    result.LogFile = s;
                     continue;
                 }
 
 
                 if (lastArg == "-n")
                 {
-                    niceness = SymMap.TryGetValue(s, out var sym)
+                    result.Niceness = SymMap.TryGetValue(s, out var sym)
                         ? sym
                         : TryParseInt(lastArg, s);
-
+                    result.NicenessSet = true;
                     continue;
                 }
 
-                processIds.Add(TryParseInt(lastArg, s));
+                result.ProcessIds.Add(TryParseInt(lastArg, s));
             }
 
-            return (niceness, watch, processIds.ToArray(), false, verbose);
+            return result;
         }
 
-        private static int Watch(int niceness, int[] processIds, bool verbose)
+        private static async Task<int> Watch(Options options)
         {
             var remindedUser = false;
             while (true)
             {
                 if (!remindedUser)
                 {
-                    Console.WriteLine("Watching processes... will renice every 1s... Ctrl-C to stop!");
+                    options.Logger.Log("Watching processes... will renice every 1s... Ctrl-C to stop!");
                     remindedUser = true;
                 }
-                
-                if (!DistributeTheNiceness(niceness, processIds, verbose))
+
+                if (!await DistributeTheNiceness(options))
                 {
-                    Console.WriteLine($"Unable to renice one or more processes -- perhaps they're dead, Jim?");
+                    options.Logger.Log($"Unable to renice one or more processes -- perhaps they're dead, Jim?");
                     return 1;
                 }
 
@@ -121,25 +146,31 @@ namespace renice
             Console.WriteLine($"usage: {shorter} {{-w}} {{-v}} -n [niceness] -p [pid] ...[pid] ...");
             Console.WriteLine("  where niceness is similar to *nix niceness");
             Console.WriteLine("  ie: -19 is real-time and 19 is idle");
-            Console.WriteLine("  add -w to watch the processes and renice periodically");
+            Console.WriteLine("  add -d to run in dummy mode (report only, no priority alteration)");
+            Console.WriteLine("  add -l {path} to save logs to a file");
             Console.WriteLine("  add -v to see verbose logging");
+            Console.WriteLine("  add -w to watch the processes and renice periodically");
         }
 
-        private static bool DistributeTheNiceness(
-            int niceness,
-            int[] processIds,
-            bool verbose
+        private static async Task<bool> DistributeTheNiceness(
+            Options options
         )
         {
-            var selected = PriorityMap.TryGetValue(niceness, out var priorityClass)
+            var selected = PriorityMap.TryGetValue(options.Niceness, out var priorityClass)
                 ? priorityClass
                 : throw new ArgumentException(
-                    $"Unable to set priority to {niceness}. Try a value from 19 (lowest) to -19");
+                    $"Unable to set priority to {options.Niceness}. Try a value from 19 (lowest) to -19");
 
             var error = false;
-            foreach (var id in processIds)
+            var ids = await options.ResolveAllProcessIds();
+            if (ids.Length == 0)
             {
-                error |= TrySetPriority(id, selected, verbose);
+                options.Logger.Log($"No matching process ids found");
+            }
+
+            foreach (var id in ids)
+            {
+                error |= TrySetPriority(id, selected, options);
             }
 
             return error;
@@ -148,28 +179,34 @@ namespace renice
         private static bool TrySetPriority(
             int id,
             ProcessPriorityClass selected,
-            bool verbose
+            Options options
         )
         {
             try
             {
                 using var p = Process.GetProcessById(id);
                 var originalClass = p.PriorityClass;
+                if (options.Dummy)
+                {
+                    options.Logger.Log($"Process #{id} ({p.ProcessName}) has priority: {originalClass}");
+                    return true;
+                }
+
                 if (originalClass == selected)
                 {
-                    if (verbose)
+                    if (options.Verbose)
                     {
-                        Status($"pid [{id}] already has priority {selected}");
+                        options.Logger.Status($"pid [{id}] already has priority {selected}");
                     }
 
                     return true;
                 }
 
                 p.PriorityClass = selected;
-                if (verbose)
+                if (options.Verbose)
                 {
-                    Status($"altered priority of pid [{id}] from {originalClass} to {selected}");
-                    AfterStatus();
+                    options.Logger.Status($"altered priority of pid [{id}] from {originalClass} to {selected}");
+                    options.Logger.AfterStatus();
                 }
 
                 return true;
@@ -178,33 +215,6 @@ namespace renice
             {
                 Console.Error.WriteLine($"Can't set priority on {id}: {ex.Message}");
                 return false;
-            }
-        }
-
-        private static int _lastMessageLength = 0;
-        private static void Status(string message)
-        {
-            var overwrite = new String(' ', _lastMessageLength);
-            var timestamped = $"[{TimeStamp}] {message}";
-            Console.Out.Write($"\r{overwrite}\r{timestamped}");
-            _lastMessageLength = timestamped.Length;
-        }
-
-        private static void AfterStatus()
-        {
-            if (_lastMessageLength > 0)
-            {
-                _lastMessageLength = 0;
-                Console.WriteLine("");
-            }
-        }
-
-        private static string TimeStamp 
-        {
-            get 
-            {
-                var now = DateTime.Now;
-                return $"{now.Year:0000}-{now.Month:00}-{now.Day:00} {now.Hour:00}:{now.Minute:00}:{now.Second:00}";
             }
         }
 
@@ -273,6 +283,212 @@ namespace renice
             return int.TryParse(s, out var result)
                 ? result
                 : throw new ArgumentException($"{name} requires an integer argument (got {s})");
+        }
+    }
+
+    public class Options
+    {
+        public bool NicenessSet { get; set; } = false;
+        public int Niceness { get; set; }
+        public bool Watch { get; set; } = false;
+
+        public async Task<int[]> ResolveAllProcessIds()
+        {
+            return ProcessIds.Concat(
+                await TryFoundMatchedProcesses()
+            ).ToArray();
+        }
+
+        public List<int> ProcessIds { get; } = new List<int>();
+        public bool ShowedHelp { get; } = false;
+        public bool Verbose { get; set; } = false;
+        public string LogFile { get; set; } = null;
+        public bool Dummy { get; set; } = false;
+        public List<string> ProcessMatchers { get; } = new List<string>();
+
+        public Logger Logger
+            => _logger ??= new Logger(this);
+
+        private Logger _logger;
+
+        private async Task<IEnumerable<int>> TryFoundMatchedProcesses()
+        {
+            var result = new List<int>();
+            foreach (var s in ProcessMatchers)
+            {
+                result.AddRange(
+                    await TryFindProcessesMatching(s)
+                );
+            }
+
+            return result;
+        }
+        
+        private static int MyPid => _myPid ??= Process.GetCurrentProcess().Id;
+        private static int? _myPid;
+
+        private async Task<IEnumerable<int>> TryFindProcessesMatching(
+            string s
+        )
+        {
+            Logger.VerboseLog($"Attempting to match processes with '{s}'");
+            var re = new Regex(s, RegexOptions.IgnoreCase);
+            var tasks = Process.GetProcesses()
+                .Where(p => p.Id != MyPid)
+                .Select(p =>
+                {
+                    return Task.Run(() =>
+                    {
+                        try
+                        {
+                            var commandLine = TryGet(() => ProcessCommandLine.Retrieve(p, out var result) == 0
+                                ? result
+                                : ""
+                            );
+                            var strings = new[]
+                            {
+                                p.MainWindowTitle,
+                                p.ProcessName,
+                                commandLine
+                            };
+                            return new
+                            {
+                                p.Id,
+                                p.MainWindowTitle,
+                                p.ProcessName,
+                                CommandLine = commandLine,
+                                IsMatch = strings.Any(re.IsMatch)
+                            };
+                        }
+                        catch
+                        {
+                            return null;
+                        }
+                    });
+                });
+            var results = await Task.WhenAll(tasks);
+            return results.Where(o => o?.IsMatch == true)
+                .Select(o =>
+                {
+                    Logger.VerboseLog(string.IsNullOrWhiteSpace(o.MainWindowTitle)
+                        ? $"match: {o.CommandLine}"
+                        : $"match: {o.CommandLine} ({o.MainWindowTitle})");
+                    return o.Id;
+                })
+                .ToArray();
+
+            string TryGet(Func<string> func)
+            {
+                try
+                {
+                    return func();
+                }
+                catch
+                {
+                    return "";
+                }
+            }
+        }
+    }
+
+    public class Logger
+    {
+        private readonly Options _options;
+
+        public Logger(Options options)
+        {
+            _options = options;
+        }
+
+        private int _lastMessageLength = 0;
+
+        public void Status(string message)
+        {
+            var overwrite = new String(' ', _lastMessageLength);
+            var timestamped = $"[{TimeStamp}] {message}";
+            Console.Out.Write($"\r{overwrite}\r{timestamped}");
+            _lastMessageLength = timestamped.Length;
+            LogToFile(timestamped);
+        }
+
+        public void VerboseLog(string message)
+        {
+            if (!_options.Verbose)
+            {
+                return;
+            }
+
+            Log(message);
+        }
+
+        public void Log(string message)
+        {
+            Console.WriteLine(message);
+            LogToFile(message);
+        }
+
+        public void VerboseStatus(string message)
+        {
+            LogToFile(message); // always log to file when enabled
+            if (!_options.Verbose)
+            {
+                return;
+            }
+
+            Status(message);
+        }
+
+        public void AfterStatus()
+        {
+            if (_lastMessageLength > 0)
+            {
+                _lastMessageLength = 0;
+                Console.WriteLine("");
+            }
+        }
+
+        private void LogToFile(string message)
+        {
+            if (_options.LogFile is null)
+            {
+                return;
+            }
+
+            try
+            {
+                var dir = Path.GetDirectoryName(_options.LogFile);
+                if (!Directory.Exists(dir))
+                {
+                    Directory.CreateDirectory(dir);
+                }
+
+                File.AppendAllLines(_options.LogFile, new[] { message });
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Unable to log to log file: {ex.Message}");
+            }
+        }
+
+        private string TimeStamp
+        {
+            get
+            {
+                var now = DateTime.Now;
+                return $"{now.Year:0000}-{now.Month:00}-{now.Day:00} {now.Hour:00}:{now.Minute:00}:{now.Second:00}";
+            }
+        }
+    }
+
+    internal static class StringExtensions
+    {
+        internal static string QuoteIfNecessary(
+            this string s
+        )
+        {
+            return s?.Contains(" ") ?? false
+                ? $"\"{s}\""
+                : $"{s}";
         }
     }
 }
