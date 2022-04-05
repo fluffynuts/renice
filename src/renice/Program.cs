@@ -2,10 +2,9 @@
 using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
-using System.Linq;
-using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Linq;
 
 namespace renice
 {
@@ -60,50 +59,57 @@ namespace renice
             var result = new Options();
             foreach (var s in args)
             {
-                if (s == "--help" || s == "-h")
+                if (Switches.Help.Contains(s))
                 {
                     ShowHelp();
+                    result.ShowedHelp = true;
                     return result;
                 }
 
-                if (s == "-w")
+                if (Switches.Watch.Contains(s))
                 {
                     result.Watch = true;
                     continue;
                 }
 
-                if (s == "-v")
+                if (Switches.Verbose.Contains(s))
                 {
                     result.Verbose = true;
                     continue;
                 }
 
-                if (s == "-d")
+                if (Switches.Dummy.Contains(s))
                 {
                     result.Dummy = true;
                     continue;
                 }
 
-                if (s == "-n" || s == "-p" || s == "-l" || s == "-f")
+                if (Switches.TakesArguments.Contains(s))
                 {
                     lastArg = s;
                     continue;
                 }
 
-                if (lastArg == "-f")
+                if (Switches.Match.Contains(lastArg))
                 {
                     result.ProcessMatchers.Add(s);
                     continue;
                 }
 
-                if (lastArg == "-l")
+                if (Switches.LogFile.Contains(lastArg))
                 {
                     result.LogFile = s;
                     continue;
                 }
 
+                if (Switches.Interval.Contains(lastArg))
+                {
+                    result.WatchIntervalSeconds = TryParseInt(lastArg, s);
+                    continue;
+                }
 
-                if (lastArg == "-n")
+
+                if (Switches.Nice.Contains(lastArg))
                 {
                     result.Niceness = SymMap.TryGetValue(s, out var sym)
                         ? sym
@@ -121,21 +127,23 @@ namespace renice
         private static async Task<int> Watch(Options options)
         {
             var remindedUser = false;
+            var interval = options.WatchIntervalSeconds * 1000;
             while (true)
             {
                 if (!remindedUser)
                 {
-                    options.Logger.Log("Watching processes... will renice every 1s... Ctrl-C to stop!");
+                    options.Logger.Log(
+                        $"Watching processes... will {(options.Dummy ? "report" : "renice")} every {options.WatchIntervalSeconds}s... Ctrl-C to stop!");
                     remindedUser = true;
                 }
 
                 if (!await DistributeTheNiceness(options))
                 {
-                    options.Logger.Log($"Unable to renice one or more processes -- perhaps they're dead, Jim?");
+                    options.Logger.Log("Unable to renice one or more processes -- perhaps they're dead, Jim?");
                     return 1;
                 }
 
-                Thread.Sleep(1000);
+                Thread.Sleep(interval);
             }
         }
 
@@ -145,11 +153,21 @@ namespace renice
             var shorter = Path.GetFileNameWithoutExtension(thisApp);
             Console.WriteLine($"usage: {shorter} {{-w}} {{-v}} -n [niceness] -p [pid] ...[pid] ...");
             Console.WriteLine("  where niceness is similar to *nix niceness");
-            Console.WriteLine("  ie: -19 is real-time and 19 is idle");
-            Console.WriteLine("  add -d to run in dummy mode (report only, no priority alteration)");
-            Console.WriteLine("  add -l {path} to save logs to a file");
-            Console.WriteLine("  add -v to see verbose logging");
-            Console.WriteLine("  add -w to watch the processes and renice periodically");
+            WriteHelpPart(Switches.Dummy, "run in dummy mode (report only, no priority alteration)");
+            WriteHelpPart(Switches.Help, "show this help");
+            WriteHelpPart(Switches.Interval, $"interval, in seconds, between watch rounds (default: {Options.DEFAULT_WATCH_INTERVAL_SECONDS})");
+            WriteHelpPart(Switches.LogFile, "write logs to the specified file");
+            WriteHelpPart(Switches.Match, "match processes by name");
+            WriteHelpPart(Switches.Nice, "set the niceness from -19 (realtime) to 19 (idle)");
+            WriteHelpPart(Switches.Pid, "one or more process ids to renice");
+            WriteHelpPart(Switches.Verbose, "see more verbose logging");
+            WriteHelpPart(Switches.Watch, "watch the processes and renice  periodically");
+        }
+
+        private static void WriteHelpPart(string[] switches, string description)
+        {
+            var pre = string.Join(", ", switches).PadRight(15);
+            Console.WriteLine($"  {pre}  {description}");
         }
 
         private static async Task<bool> DistributeTheNiceness(
@@ -176,6 +194,8 @@ namespace renice
             return error;
         }
 
+        private static Dictionary<int, ProcessPriorityClass> LastPriorities = new();
+
         private static bool TrySetPriority(
             int id,
             ProcessPriorityClass selected,
@@ -184,11 +204,25 @@ namespace renice
         {
             try
             {
-                using var p = Process.GetProcessById(id);
+                using var p = ProcessQuery.GetProcessById(id);
                 var originalClass = p.PriorityClass;
                 if (options.Dummy)
                 {
-                    options.Logger.Log($"Process #{id} ({p.ProcessName}) has priority: {originalClass}");
+                    if (LastPriorities.TryGetValue(id, out var last) &&
+                        last != originalClass)
+                    {
+                        options.Logger.Status(
+                            $"Process #{id} ({p.ProcessName}) has changed priority: {last} -> {originalClass}");
+                        // leave up on-screen
+                        options.Logger.AfterStatus();
+                    }
+                    else
+                    {
+                        options.Logger.Status($"Process #{id} ({p.ProcessName}) has priority: {originalClass}");
+                    }
+
+                    LastPriorities[id] = originalClass;
+
                     return true;
                 }
 
@@ -269,8 +303,8 @@ namespace renice
             var result = new int[howMany];
             var idx = 0;
             for (var i = min;
-                i < max;
-                i++)
+                 i < max;
+                 i++)
             {
                 result[idx++] = i;
             }
@@ -283,111 +317,6 @@ namespace renice
             return int.TryParse(s, out var result)
                 ? result
                 : throw new ArgumentException($"{name} requires an integer argument (got {s})");
-        }
-    }
-
-    public class Options
-    {
-        public bool NicenessSet { get; set; } = false;
-        public int Niceness { get; set; }
-        public bool Watch { get; set; } = false;
-
-        public async Task<int[]> ResolveAllProcessIds()
-        {
-            return ProcessIds.Concat(
-                await TryFoundMatchedProcesses()
-            ).ToArray();
-        }
-
-        public List<int> ProcessIds { get; } = new List<int>();
-        public bool ShowedHelp { get; } = false;
-        public bool Verbose { get; set; } = false;
-        public string LogFile { get; set; } = null;
-        public bool Dummy { get; set; } = false;
-        public List<string> ProcessMatchers { get; } = new List<string>();
-
-        public Logger Logger
-            => _logger ??= new Logger(this);
-
-        private Logger _logger;
-
-        private async Task<IEnumerable<int>> TryFoundMatchedProcesses()
-        {
-            var result = new List<int>();
-            foreach (var s in ProcessMatchers)
-            {
-                result.AddRange(
-                    await TryFindProcessesMatching(s)
-                );
-            }
-
-            return result;
-        }
-        
-        private static int MyPid => _myPid ??= Process.GetCurrentProcess().Id;
-        private static int? _myPid;
-
-        private async Task<IEnumerable<int>> TryFindProcessesMatching(
-            string s
-        )
-        {
-            Logger.VerboseLog($"Attempting to match processes with '{s}'");
-            var re = new Regex(s, RegexOptions.IgnoreCase);
-            var tasks = Process.GetProcesses()
-                .Where(p => p.Id != MyPid)
-                .Select(p =>
-                {
-                    return Task.Run(() =>
-                    {
-                        try
-                        {
-                            var commandLine = TryGet(() => ProcessCommandLine.Retrieve(p, out var result) == 0
-                                ? result
-                                : ""
-                            );
-                            var strings = new[]
-                            {
-                                p.MainWindowTitle,
-                                p.ProcessName,
-                                commandLine
-                            };
-                            return new
-                            {
-                                p.Id,
-                                p.MainWindowTitle,
-                                p.ProcessName,
-                                CommandLine = commandLine,
-                                IsMatch = strings.Any(re.IsMatch)
-                            };
-                        }
-                        catch
-                        {
-                            return null;
-                        }
-                    });
-                });
-            var results = await Task.WhenAll(tasks);
-            return results.Where(o => o?.IsMatch == true)
-                .Select(o =>
-                {
-                    Logger.VerboseLog(string.IsNullOrWhiteSpace(o.MainWindowTitle)
-                        ? $"match: {o.CommandLine}"
-                        : $"match: {o.CommandLine} ({o.MainWindowTitle})");
-                    return o.Id;
-                })
-                .ToArray();
-
-            string TryGet(Func<string> func)
-            {
-                try
-                {
-                    return func();
-                }
-                catch
-                {
-                    return "";
-                }
-            }
         }
     }
 
@@ -423,8 +352,9 @@ namespace renice
 
         public void Log(string message)
         {
-            Console.WriteLine(message);
-            LogToFile(message);
+            var timestamped = $"[{TimeStamp}] {message}";
+            Console.WriteLine(timestamped);
+            LogToFile(timestamped);
         }
 
         public void VerboseStatus(string message)

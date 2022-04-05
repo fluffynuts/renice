@@ -4,9 +4,15 @@
     <TargetFramework>netcoreapp3.1</TargetFramework>
     <Configurations>Release;Debug</Configurations>
     <Platforms>AnyCPU;x64</Platforms>
+    <LangVersion>latest</LangVersion>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
     <PublishSingleFile>true</PublishSingleFile>
     <PublishTrimmed>true</PublishTrimmed>
   </PropertyGroup>
+  <ItemGroup>
+    <Content Include="..\PeanutButter\source\Utils\PeanutButter.EasyArgs\icon.png">
+      <Link>icon.png</Link>
+    </Content>
+  </ItemGroup>
 </Project>
