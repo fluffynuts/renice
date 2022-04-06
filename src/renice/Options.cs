@@ -25,6 +25,7 @@ public static class Switches
             .Concat(LogFile)
             .Concat(Nice)
             .Concat(Interval)
+            .Concat(Pid)
             .ToArray();
 }
 

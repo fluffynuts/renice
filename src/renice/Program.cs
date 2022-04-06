@@ -205,6 +205,7 @@ namespace renice
             try
             {
                 using var p = ProcessQuery.GetProcessById(id);
+
                 var originalClass = p.PriorityClass;
                 if (options.Dummy)
                 {

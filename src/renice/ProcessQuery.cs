@@ -6,7 +6,7 @@ namespace renice;
 
 public static class ProcessQuery
 {
-    private static Dictionary<int, Process> _processes = null;
+    private static Dictionary<int, Process> _processes = new();
     public static Process[] GetAllProcesses()
     {
         var result = Process.GetProcesses();
