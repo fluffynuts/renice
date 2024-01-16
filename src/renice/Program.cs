@@ -149,7 +149,7 @@ namespace renice
 
         private static void ShowHelp()
         {
-            var thisApp = new Uri(typeof(Program).Assembly.Location).LocalPath;
+            var thisApp = FindFirstFilePathFrom(Environment.CommandLine);
             var shorter = Path.GetFileNameWithoutExtension(thisApp);
             Console.WriteLine($"usage: {shorter} {{-w}} {{-v}} -n [niceness] -p [pid] ...[pid] ...");
             Console.WriteLine("  where niceness is similar to *nix niceness");
@@ -162,6 +162,22 @@ namespace renice
             WriteHelpPart(Switches.Pid, "one or more process ids to renice");
             WriteHelpPart(Switches.Verbose, "see more verbose logging");
             WriteHelpPart(Switches.Watch, "watch the processes and renice  periodically");
+        }
+
+        private static string FindFirstFilePathFrom(string cli)
+        {
+            var parts = new Queue<string>(cli.Split(" "));
+            var collected = new List<string>();
+            while (parts.TryDequeue(out var part))
+            {
+                collected.Add(part);
+                var attempt = string.Join(" ", collected);
+                if (File.Exists(attempt))
+                {
+                    return attempt;
+                }
+            }
+            return "renice.exe"; // take a guess, and it shouldn't matter too much anyway
         }
 
         private static void WriteHelpPart(string[] switches, string description)
