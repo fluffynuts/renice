@@ -360,3 +360,5 @@ MigrationBackup/
 FodyWeavers.xsd
 .idea
 build-tools
+
+local-tasks/*.generated.js

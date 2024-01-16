@@ -3,6 +3,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Runtime.InteropServices;
 
@@ -90,7 +91,7 @@ public static class ProcessCommandLine
         public static extern IntPtr CommandLineToArgv(string lpCmdLine, out int pNumArgs);
     }
 
-    private static bool ReadStructFromProcessMemory<TStruct>(
+    private static bool ReadStructFromProcessMemory<[DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.PublicConstructors | DynamicallyAccessedMemberTypes.NonPublicConstructors)]TStruct>(
         IntPtr hProcess, IntPtr lpBaseAddress, out TStruct val)
     {
         val = default;

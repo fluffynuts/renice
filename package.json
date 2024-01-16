@@ -4,10 +4,10 @@
   "description": "renices things",
   "main": "index.js",
   "scripts": {
-    "build": "run-s \"zarro build\"",
+    "build": "zarro @",
     "publish": "dotnet publish src/renice/renice.csproj -c Release -r win-x64",
     "publish-local": "run-s publish copy-local",
-    "copy-local": "cpy src/renice/bin/Release/netcoreapp3.1/win-x64/publish/renice.exe /apps/scripts",
+    "copy-local": "zarro @",
     "zarro": "zarro"
   },
   "repository": {
@@ -23,7 +23,10 @@
   "homepage": "https://github.com/fluffynuts/renice#readme",
   "devDependencies": {
     "cpy-cli": "^3.1.1",
+    "exec-step": "^0.8.0",
     "npm-run-all": "^4.1.5",
-    "zarro": "^1.122.0"
+    "typescript": "^5.3.3",
+    "yafs": "^1.36.0",
+    "zarro": "^1.168.0"
   }
 }
