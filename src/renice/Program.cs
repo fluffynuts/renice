@@ -8,9 +8,9 @@ using System.Linq;
 
 namespace renice
 {
-    class Program
+    public static class Program
     {
-        static async Task<int> Main(string[] args)
+        public static async Task<int> Main(string[] args)
         {
             var options = ParseArgs(args);
             if (options.ShowedHelp)
@@ -59,6 +59,7 @@ namespace renice
             var result = new Options();
             foreach (var s in args)
             {
+                // collect which switches have been chucked at the app
                 if (Switches.Help.Contains(s))
                 {
                     ShowHelp();
@@ -89,36 +90,47 @@ namespace renice
                     lastArg = s;
                     continue;
                 }
+                
+                // test for smooshed args
+                var overrideS = s;
+                foreach (var sw in Switches.AllSwitches)
+                {
+                    if (s.StartsWith(sw))
+                    {
+                        overrideS = s.Substring(sw.Length);
+                        lastArg = sw;
+                    }
+                }
 
+                // map parameter values to switches
                 if (Switches.Match.Contains(lastArg))
                 {
-                    result.ProcessMatchers.Add(s);
+                    result.ProcessMatchers.Add(overrideS);
                     continue;
                 }
 
                 if (Switches.LogFile.Contains(lastArg))
                 {
-                    result.LogFile = s;
+                    result.LogFile = overrideS;
                     continue;
                 }
 
                 if (Switches.Interval.Contains(lastArg))
                 {
-                    result.WatchIntervalSeconds = TryParseInt(lastArg, s);
+                    result.WatchIntervalSeconds = TryParseInt(lastArg, overrideS);
                     continue;
                 }
 
-
                 if (Switches.Nice.Contains(lastArg))
                 {
-                    result.Niceness = SymMap.TryGetValue(s, out var sym)
+                    result.Niceness = SymMap.TryGetValue(overrideS, out var sym)
                         ? sym
-                        : TryParseInt(lastArg, s);
+                        : TryParseInt(lastArg, overrideS);
                     result.NicenessSet = true;
                     continue;
                 }
 
-                result.ProcessIds.Add(TryParseInt(lastArg, s));
+                result.ProcessIds.Add(TryParseInt(lastArg, overrideS));
             }
 
             return result;
@@ -133,7 +145,8 @@ namespace renice
                 if (!remindedUser)
                 {
                     options.Logger.Log(
-                        $"Watching processes... will {(options.Dummy ? "report" : "renice")} every {options.WatchIntervalSeconds}s... Ctrl-C to stop!");
+                        $"Watching processes... will {(options.Dummy ? "report" : "renice")} every {options.WatchIntervalSeconds}s... Ctrl-C to stop!"
+                    );
                     remindedUser = true;
                 }
 
@@ -155,7 +168,10 @@ namespace renice
             Console.WriteLine("  where niceness is similar to *nix niceness");
             WriteHelpPart(Switches.Dummy, "run in dummy mode (report only, no priority alteration)");
             WriteHelpPart(Switches.Help, "show this help");
-            WriteHelpPart(Switches.Interval, $"interval, in seconds, between watch rounds (default: {Options.DEFAULT_WATCH_INTERVAL_SECONDS})");
+            WriteHelpPart(
+                Switches.Interval,
+                $"interval, in seconds, between watch rounds (default: {Options.DEFAULT_WATCH_INTERVAL_SECONDS})"
+            );
             WriteHelpPart(Switches.LogFile, "write logs to the specified file");
             WriteHelpPart(Switches.Match, "match processes by name");
             WriteHelpPart(Switches.Nice, "set the niceness from -19 (realtime) to 19 (idle)");
@@ -177,6 +193,7 @@ namespace renice
                     return attempt;
                 }
             }
+
             return "renice.exe"; // take a guess, and it shouldn't matter too much anyway
         }
 
@@ -193,7 +210,8 @@ namespace renice
             var selected = PriorityMap.TryGetValue(options.Niceness, out var priorityClass)
                 ? priorityClass
                 : throw new ArgumentException(
-                    $"Unable to set priority to {options.Niceness}. Try a value from 19 (lowest) to -19");
+                    $"Unable to set priority to {options.Niceness}. Try a value from 19 (lowest) to -19"
+                );
 
             var error = false;
             var ids = await options.ResolveAllProcessIds();
@@ -229,7 +247,8 @@ namespace renice
                         last != originalClass)
                     {
                         options.Logger.Status(
-                            $"Process #{id} ({p.ProcessName}) has changed priority: {last} -> {originalClass}");
+                            $"Process #{id} ({p.ProcessName}) has changed priority: {last} -> {originalClass}"
+                        );
                         // leave up on-screen
                         options.Logger.AfterStatus();
                     }
@@ -260,6 +279,17 @@ namespace renice
                     options.Logger.AfterStatus();
                 }
 
+                if (selected == ProcessPriorityClass.RealTime)
+                {
+                    Console.Error.WriteLine(
+                        $@"WARNING: RealTime priority is not recommended:
+- a rogue process could make it very difficult to regain control over this machine
+- tests indicate that attempting to set RealTime priority as non-admin may result
+  in setting High priority instead
+"
+                    );
+                }
+
                 return true;
             }
             catch (Exception ex)
@@ -270,14 +300,31 @@ namespace renice
         }
 
         private static readonly Dictionary<ProcessPriorityClass, int[]> ReverseMap
-            = new Dictionary<ProcessPriorityClass, int[]>()
+            = new()
             {
                 [ProcessPriorityClass.RealTime] = new[] { -19 },
-                [ProcessPriorityClass.High] = Range(-18, -9),
+                [ProcessPriorityClass.High] = Range(-18, -10),
                 [ProcessPriorityClass.AboveNormal] = Range(-10, -1),
                 [ProcessPriorityClass.Normal] = new[] { 0 },
                 [ProcessPriorityClass.BelowNormal] = Range(1, 10),
                 [ProcessPriorityClass.Idle] = Range(10, 20)
+            };
+
+        private static readonly Dictionary<string, int> SymMap =
+            new(StringComparer.OrdinalIgnoreCase)
+            {
+                ["realtime"] = -19,
+                ["real-time"] = -19,
+                ["rt"] = -19,
+                ["high"] = -11,
+                ["abovenormal"] = -8,
+                ["above-normal"] = -8,
+                ["above"] = -8,
+                ["normal"] = 0,
+                ["belownormal"] = 8,
+                ["below-normal"] = 8,
+                ["below"] = 8,
+                ["idle"] = 19
             };
 
         private static readonly Dictionary<int, ProcessPriorityClass> PriorityMap
@@ -296,23 +343,6 @@ namespace renice
 
             return map;
         }
-
-        private static readonly Dictionary<string, int> SymMap =
-            new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase)
-            {
-                ["realtime"] = -19,
-                ["real-time"] = -19,
-                ["rt"] = -19,
-                ["high"] = -10,
-                ["abovenormal"] = -8,
-                ["above-normal"] = -8,
-                ["above"] = -8,
-                ["normal"] = 0,
-                ["belownormal"] = 8,
-                ["below-normal"] = 8,
-                ["below"] = 8,
-                ["idle"] = 19
-            };
 
         private static int[] Range(int min, int max)
         {

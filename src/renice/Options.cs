@@ -27,6 +27,17 @@ public static class Switches
             .Concat(Interval)
             .Concat(Pid)
             .ToArray();
+    
+    public static string[] AllSwitches =
+        Help.Concat(Watch)
+            .Concat(Verbose)
+            .Concat(Dummy)
+            .Concat(Match)
+            .Concat(Interval)
+            .Concat(LogFile)
+            .Concat(Nice)
+            .Concat(Pid)
+            .ToArray();
 }
 
 public class Options
